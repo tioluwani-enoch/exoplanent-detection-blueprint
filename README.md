@@ -1,2 +1,3 @@
 # exoplanent-detection-blueprint
-This is the first project that Jacob and I are working on
+# This is the first project that Jacob and I are working on
+# Hi Enoch
