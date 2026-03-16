@@ -229,9 +229,19 @@ def preprocess_target(kic_id, lc_collection, label=1):
     period_days    = 289.86   # Kepler-22b known value
     duration_hours = 7.4      # features.py will compute dynamically
 
+    # Save full stitched light curve for reference + visualization
+    lc_df = pd.DataFrame({
+        "time_BKJD": time,
+        "flux_norm":  flux_normalized,
+    })
+    lc_df.to_csv(
+        os.path.join(PROCESSED_DIR, f"KIC_{kic_id}_lightcurve.csv"),
+        index=False
+    )
+    print(f"  Saved full light curve CSV: KIC_{kic_id}_lightcurve.csv")
+
     # Window
     windows, centers = window_lightcurve(time, flux_normalized)
-    print(f"  Windowed: {len(windows)} windows of size {WINDOW_SIZE}")
 
     # Save
     meta = save_windows(
