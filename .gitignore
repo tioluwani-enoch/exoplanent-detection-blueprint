@@ -1,4 +1,5 @@
 # Virtual environment
+.venv/
 venv/
 env/
 
@@ -8,6 +9,8 @@ __pycache__/
 *.pyo
 *.pyd
 .Python
+*.so
+.pytest_cache/
 
 # Jupyter
 .ipynb_checkpoints/
@@ -47,3 +50,7 @@ logs/
 dist/
 build/
 *.egg-info/
+
+# Kepler / MAST downloads (lightkurve cache)
+mastDownload/
+.lightkurve-cache/
