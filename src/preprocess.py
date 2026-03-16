@@ -1,128 +1,24 @@
 import numpy as np
 import pandas as pd
 import os
-from scipy.signal import savgol_filter
+import lightkurve as lk
 from astropy.stats import sigma_clip
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROCESSED_DIR = os.path.join(PROJECT_ROOT, "data", "processed")
 os.makedirs(PROCESSED_DIR, exist_ok=True)
 
-WINDOW_SIZE = 201   # cadences per window (~100 hrs at 30-min cadence)
-STEP_SIZE   = 50    # stride between windows
+WINDOW_SIZE = 201
+STEP_SIZE   = 50
 
 
-# ── 1. SIGMA CLIPPING ─────────────────────────────────────────────────────────
-
-def clean_flux(flux):
-    """
-    Sigma clip at 2.5-sigma (physics-approved).
-    Targets sharp single-point spikes: cosmic rays, flares, residual artifacts.
-    Safe for transits — TrES-2b's 1.6% depth is gradual and multi-cadence,
-    will never trigger a 2.5σ single-point cut.
-    """
-    flux = np.array(flux, dtype=np.float64)
-    clipped = sigma_clip(flux, sigma=2.5, maxiters=5, masked=True)
-    flux[clipped.mask] = np.nan
-    return flux
-
-
-# ── 2. INTERPOLATION ──────────────────────────────────────────────────────────
-
-def interpolate_gaps(flux):
-    """
-    Interpolate small gaps only (physics-approved rules):
-      - Linear interpolation for gaps ≤ 10 consecutive NaNs
-      - Gaps > 10 cadences left as NaN (real quarter boundaries / data gaps)
-      - Zeroing NaNs is physically wrong — creates fake flat-bottomed dips
-        that look like shallow transits to the ML model
-    """
-    flux_series = pd.Series(flux)
-    flux_interpolated = flux_series.interpolate(
-        method='linear',
-        limit=10,
-        limit_direction='both'
-    )
-
-    # Report gap distribution
-    nan_mask   = flux_series.isna()
-    total_nans = nan_mask.sum()
-
-    if total_nans > 0:
-        # Find runs of NaNs
-        gap_lengths = []
-        count = 0
-        for val in nan_mask:
-            if val:
-                count += 1
-            elif count > 0:
-                gap_lengths.append(count)
-                count = 0
-        if count > 0:
-            gap_lengths.append(count)
-
-        gap_lengths = np.array(gap_lengths)
-        small_gaps  = (gap_lengths <= 10).sum()
-        large_gaps  = (gap_lengths  > 10).sum()
-        print(f"  Gap analysis: {total_nans} NaNs total | "
-              f"{small_gaps} small gaps (≤10, interpolated) | "
-              f"{large_gaps} large gaps (>10, masked out)")
-
-    return flux_interpolated.values
-
-
-# ── 3. DETRENDING ─────────────────────────────────────────────────────────────
-
-def detrend_flux(flux, window_length=101, polyorder=2):
-    """
-    Remove long-term stellar variability using Savitzky-Golay filter.
-    window_length=101 cadences ~ 50 hrs — safely longer than the 7.4 hr
-    transit so the transit shape is not smoothed away.
-    Divides out the trend to preserve fractional transit depth.
-    """
-    flux = np.array(flux, dtype=np.float64)
-    mask = np.isfinite(flux)
-
-    if mask.sum() < window_length:
-        return flux
-
-    flux_filled = flux.copy()
-    flux_filled[~mask] = np.interp(
-        np.where(~mask)[0],
-        np.where(mask)[0],
-        flux[mask]
-    )
-
-    trend     = savgol_filter(flux_filled, window_length=window_length, polyorder=polyorder)
-    detrended = flux / trend
-    detrended[~mask] = np.nan
-    return detrended
-
-
-# ── 4. NORMALIZATION ──────────────────────────────────────────────────────────
-
-def normalize_flux(flux):
-    """
-    Normalize to zero median, unit std deviation.
-    Median used instead of mean — transit dips are rare events and
-    would pull the mean down, shifting the out-of-transit baseline.
-    """
-    flux   = np.array(flux, dtype=np.float32)
-    median = np.nanmedian(flux)
-    std    = np.nanstd(flux)
-    if std == 0:
-        return flux - median
-    return (flux - median) / std
-
-
-# ── 5. WINDOWING ──────────────────────────────────────────────────────────────
+# ── 1. WINDOWING ──────────────────────────────────────────────────────────────
 
 def window_lightcurve(time, flux, window_size=WINDOW_SIZE, step_size=STEP_SIZE):
     """
     Slice into overlapping fixed-size windows.
-    Each window independently normalized — model sees local flux shape,
-    not absolute quarter-to-quarter offsets.
-    Windows with >10% NaN are skipped entirely (large data gaps).
+    Each window independently normalized.
+    Windows with >10% NaN skipped (large spacecraft gaps).
     """
     windows, centers = [], []
 
@@ -146,17 +42,11 @@ def window_lightcurve(time, flux, window_size=WINDOW_SIZE, step_size=STEP_SIZE):
     return np.array(windows, dtype=np.float32), np.array(centers)
 
 
-# ── 6. SAVE ───────────────────────────────────────────────────────────────────
+# ── 2. SAVE ───────────────────────────────────────────────────────────────────
 
 def save_windows(windows, centers, kic_id, label,
                  period_days=None, duration_hours=None,
                  depth_raw=None, flux_out=None, flux_in=None):
-    """
-    Save windowed dataset to disk.
-      windows.npy — shape (n_windows, window_size)
-      centers.npy — center timestamp per window
-      meta.csv    — per-window metadata with physics columns
-    """
     out_dir = os.path.join(PROCESSED_DIR, f"KIC_{kic_id}")
     os.makedirs(out_dir, exist_ok=True)
 
@@ -175,75 +65,87 @@ def save_windows(windows, centers, kic_id, label,
         "flux_in":        flux_in
     })
     meta.to_csv(os.path.join(out_dir, "meta.csv"), index=False)
-
-    print(f"Saved {len(windows)} windows for KIC {kic_id} → {out_dir}")
+    print(f"  Saved {len(windows)} windows → {out_dir}")
     return meta
 
 
-# ── 7. FULL PIPELINE ──────────────────────────────────────────────────────────
+# ── 3. FULL PIPELINE ──────────────────────────────────────────────────────────
 
 def preprocess_target(kic_id, lc_collection, label=1):
     """
-    Full preprocessing pipeline:
-      stitch (per-quarter normalize)
-      → sigma clip (2.5σ)
-      → interpolate small gaps (≤10 cadences)
-      → detrend (Savitzky-Golay)
-      → normalize (zero median)
-      → window (201 cadences, stride 50)
-      → save
+    Physics-approved pipeline order:
+      stitch → flatten → sigma clip → interpolate → normalize → window → save
+    
+    Core rule: never extract .flux.value into numpy until all
+    lightkurve operations are done. flatten() needs the lightkurve
+    object intact to fit the Savitzky-Golay trend correctly.
     """
     print(f"\nPreprocessing KIC {kic_id}...")
 
-    # Normalize each quarter individually before stitching
-    stitched = lc_collection.stitch(corrector_func=lambda x: x.normalize())
-    time = stitched.time.value
-    flux = stitched.flux.value
+    # Step 1 — stitch with per-quarter normalization
+    lc_stitched = lc_collection.stitch(corrector_func=lambda x: x.normalize())
+    print(f"  Stitched: {len(lc_stitched.flux)} cadences | "
+          f"baseline {lc_stitched.time.value[0]:.1f} – "
+          f"{lc_stitched.time.value[-1]:.1f} BKJD")
 
-    print(f"  Stitched: {len(flux)} cadences | "
-          f"baseline {time[0]:.1f} – {time[-1]:.1f} BKJD")
+    # Step 2 — flatten FIRST on native lightkurve object
+    # window_length=101 (~50 hrs) — physics-approved
+    # Must be shorter than TrES-2b period (~119 cadences)
+    lc_flat, trend = lc_stitched.flatten(window_length=101, return_trend=True)
+    print(f"  Flattened: trend removed")
 
-    # 2.5-sigma clip
-    flux_cleaned = clean_flux(flux)
-    n_clipped    = int(np.isnan(flux_cleaned).sum() - np.isnan(flux).sum())
-    print(f"  Sigma clipped: {n_clipped} outliers removed")
+    # Step 3 — sigma clip using lightkurve's built-in method
+    lc_clipped = lc_flat.remove_outliers(sigma=2.5)
+    n_removed  = len(lc_flat.flux) - len(lc_clipped.flux)
+    print(f"  Sigma clipped: {n_removed} outliers removed")
 
-    # Interpolate small gaps, mask large ones
-    flux_interp = interpolate_gaps(flux_cleaned)
+    # Step 4 — extract numpy arrays (lightkurve operations are done)
+    time     = np.array(lc_clipped.time.value,     dtype=np.float64)
+    flux     = np.array(lc_clipped.flux.value,     dtype=np.float64)
+    flux_err = np.array(lc_clipped.flux_err.value, dtype=np.float64)
 
-    # Detrend
-    flux_detrended = detrend_flux(flux_interp)
-    print(f"  Detrended: {np.isnan(flux_detrended).sum()} NaNs remaining "
-          f"(large gaps masked out)")
+    # Step 5 — interpolate small gaps (≤10 cadences), mask large ones
+    flux_series = pd.Series(flux)
+    flux_interp = flux_series.interpolate(
+        method='linear',
+        limit=10,
+        limit_direction='both'
+    ).values
+    print(f"  Interpolated small gaps")
 
-    # Normalize
-    flux_normalized = normalize_flux(flux_detrended)
-    print(f"  Flux range: "
-          f"{np.nanmin(flux_normalized):.4f} to {np.nanmax(flux_normalized):.4f}")
+    # Step 6 — normalize flux_err by median before final normalization
+    median       = np.nanmedian(flux_interp)
+    std          = np.nanstd(flux_interp)
+    flux_norm    = (flux_interp - median) / std if std > 0 else flux_interp - median
+    flux_err_norm = flux_err / median
 
-    # Physics columns
-    flux_out  = float(np.nanmedian(flux_normalized))
-    flux_in   = float(np.nanmin(flux_normalized))
-    depth_raw = float(flux_out - flux_in)
+    print(f"  Flux range: {np.nanmin(flux_norm):.4f} to {np.nanmax(flux_norm):.4f}")
 
-    period_days    = 289.86   # Kepler-22b known value
-    duration_hours = 7.4      # features.py will compute dynamically
-
-    # Save full stitched light curve for reference + visualization
+    # Step 7 — save full light curve CSV with flux_err
     lc_df = pd.DataFrame({
         "time_BKJD": time,
-        "flux_norm":  flux_normalized,
+        "flux_norm":  flux_norm,
+        "flux_err":   flux_err_norm
     })
     lc_df.to_csv(
         os.path.join(PROCESSED_DIR, f"KIC_{kic_id}_lightcurve.csv"),
         index=False
     )
-    print(f"  Saved full light curve CSV: KIC_{kic_id}_lightcurve.csv")
+    print(f"  Saved full light curve CSV")
 
-    # Window
-    windows, centers = window_lightcurve(time, flux_normalized)
+    # Physics columns
+    flux_out  = float(np.nanmedian(flux_norm))
+    flux_in   = float(np.nanmin(flux_norm))
+    depth_raw = float(flux_out - flux_in)
 
-    # Save
+    period_days    = 289.86
+    duration_hours = 7.4
+
+    # Step 8 — window
+    windows, centers = window_lightcurve(time, flux_norm)
+    print(f"  Windowed: {len(windows)} windows of size {WINDOW_SIZE}")
+
+    # Step 9 — save windows
     meta = save_windows(
         windows, centers, kic_id, label,
         period_days=period_days,
@@ -259,7 +161,6 @@ def preprocess_target(kic_id, lc_collection, label=1):
 
 if __name__ == "__main__":
     import sys
-    import lightkurve as lk
     sys.path.insert(0, os.path.dirname(__file__))
 
     kic_id = 11446443
