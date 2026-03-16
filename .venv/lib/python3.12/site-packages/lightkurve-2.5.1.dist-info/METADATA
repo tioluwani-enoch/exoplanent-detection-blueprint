@@ -1,0 +1,144 @@
+Metadata-Version: 2.3
+Name: lightkurve
+Version: 2.5.1
+Summary: A friendly package for Kepler & TESS time series analysis in Python.
+License: MIT
+Keywords: NASA,Kepler,TESS,Astronomy
+Author: Geert Barentsen
+Author-email: hello@geert.io
+Requires-Python: >=3.9,<4.0
+Classifier: Development Status :: 5 - Production/Stable
+Classifier: Intended Audience :: Science/Research
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Classifier: Programming Language :: Python
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Programming Language :: Python :: 3.13
+Classifier: Topic :: Scientific/Engineering :: Astronomy
+Requires-Dist: astropy (>=5.0)
+Requires-Dist: astroquery (>=0.3.10)
+Requires-Dist: beautifulsoup4 (>=4.6.0)
+Requires-Dist: bokeh (>=2.3.2)
+Requires-Dist: fbpca (>=1.0)
+Requires-Dist: matplotlib (>=3.1)
+Requires-Dist: memoization (>=0.3.1) ; python_version >= "3.8" and python_version < "4.0"
+Requires-Dist: numpy (>=1.18) ; python_version >= "3.8" and python_version < "3.12"
+Requires-Dist: numpy (>=1.26) ; python_version >= "3.12"
+Requires-Dist: pandas (>=1.3.6)
+Requires-Dist: patsy (>=0.5.0)
+Requires-Dist: requests (>=2.22.0)
+Requires-Dist: s3fs (>=2024.6.1)
+Requires-Dist: scikit-learn (>=0.24.0)
+Requires-Dist: scipy (>=1.7) ; python_version >= "3.8" and python_version < "3.14"
+Requires-Dist: tqdm (>=4.25.0)
+Requires-Dist: uncertainties (>=3.1.4)
+Requires-Dist: urllib3 (>=1.23) ; python_version >= "3.8" and python_version < "4.0"
+Project-URL: Bug Tracker, https://github.com/lightkurve/lightkurve/issues
+Project-URL: Documentation, https://docs.lightkurve.org
+Project-URL: Homepage, https://docs.lightkurve.org
+Project-URL: Repository, https://github.com/lightkurve/lightkurve
+Description-Content-Type: text/x-rst
+
+Lightkurve
+==========
+
+**A friendly package for Kepler & TESS time series analysis in Python.**
+
+**Documentation: https://lightkurve.github.io/lightkurve/**
+
+|test-badge| |conda-badge| |pypi-badge| |pypi-downloads| |doi-badge| |astropy-badge|
+
+.. |conda-badge| image:: https://img.shields.io/conda/vn/conda-forge/lightkurve.svg
+                 :target: https://anaconda.org/conda-forge/lightkurve
+.. |pypi-badge| image:: https://img.shields.io/pypi/v/lightkurve.svg
+                :target: https://pypi.python.org/pypi/lightkurve
+.. |pypi-downloads| image:: https://pepy.tech/badge/lightkurve
+                :target: https://pepy.tech/project/lightkurve
+.. |test-badge| image:: https://github.com/lightkurve/lightkurve/workflows/Lightkurve-tests/badge.svg
+                 :target: https://github.com/lightkurve/lightkurve/actions?query=branch%3Amain
+.. |astropy-badge| image:: https://img.shields.io/badge/powered%20by-AstroPy-orange.svg?style=flat
+                   :target: http://www.astropy.org
+.. |doi-badge| image:: https://zenodo.org/badge/DOI/10.5281/zenodo.1181928.svg
+              :target: https://docs.lightkurve.org/about/citing.html             
+
+**Lightkurve** is a community-developed, open-source Python package which offers a beautiful and user-friendly way
+to analyze astronomical flux time series data,
+in particular the pixels and lightcurves obtained by
+**NASA's Kepler and TESS exoplanet missions**.
+
+.. image:: https://raw.githubusercontent.com/lightkurve/lightkurve/main/docs/source/_static/images/lightkurve-teaser.gif
+
+This package aims to lower the barrier for students, astronomers,
+and citizen scientists interested in analyzing Kepler and TESS space telescope data.
+It does this by providing **high-quality building blocks and tutorials**
+which enable both hand-tailored data analyses and advanced automated pipelines.
+
+
+Documentation
+-------------
+
+Read the documentation at `https://lightkurve.github.io/lightkurve/ <https://lightkurve.github.io/lightkurve/>`_.
+
+
+Quickstart and Installation
+---------------------------
+
+Please visit our quickstart guide at `https://lightkurve.github.io/lightkurve/quickstart.html <https://lightkurve.github.io/lightkurve/quickstart.html>`_. 
+
+The easiest way to install *Lightkurve* and all of its dependencies is to use the ``pip`` command,
+which is a standard part of all Python distributions.
+To install *Lightkurve*, run the following command in a terminal window::
+
+    $ python -m pip install lightkurve --upgrade
+
+The ``--upgrade`` flag is optional, but recommended if you already
+have *Lightkurve* installed and want to upgrade to the latest version.
+
+Depending on the specific Python environment, you may need to replace ``python``
+with the correct Python interpreter, e.g., ``python3``.
+
+If you want to experiment with the latest development version of
+*Lightkurve*, you can install it straight from the main branch on GitHub:
+
+.. code-block:: bash
+
+    $ git clone https://github.com/lightkurve/lightkurve.git
+    $ cd lightkurve
+    $ python -m pip install .
+
+If you want to have a so-called editable install which enables the installed
+version to immediately reflect changes made in the source tree, you can use:
+
+.. code-block:: bash
+
+    $ python -m pip install poetry
+    $ poetry install
+
+Please see our guide on `https://lightkurve.github.io/lightkurve/development/index.html <https://lightkurve.github.io/lightkurve/development/index.html>`_
+for additional instructions.
+
+
+Contributing
+------------
+
+We welcome community contributions!
+Please read the  guidelines at `https://lightkurve.github.io/lightkurve/development/contributing.html <https://lightkurve.github.io/lightkurve/development/contributing.html>`_.
+
+
+Citing
+------
+
+If you find Lightkurve useful in your research, please cite it and give us a GitHub star!
+Please read the citation instructions at `https://lightkurve.github.io/lightkurve/about/citing.html <https://lightkurve.github.io/lightkurve/about/citing.html>`_.
+
+
+Contact
+-------
+Lightkurve is an open source community project created by `the authors <AUTHORS.rst>`_.
+The best way to contact us is to `open an issue <https://github.com/lightkurve/lightkurve/issues/new>`_ or to e-mail tesshelp@bigbang.gsfc.nasa.gov.
+Please include a self-contained example that fully demonstrates your problem or question.
+
