@@ -87,7 +87,9 @@ def sample_negatives(meta_df, n_samples, positive_centers):
     ])
 
     def is_near_transit(t):
-        return np.any(np.abs(t - transit_centers) < half_dur_days * 3)
+        # Exclude windows within 2x the transit half-duration of any transit center
+        # 2x gives a clean buffer without excluding the entire light curve
+        return np.any(np.abs(t - transit_centers) < half_dur_days * 2)
 
     # Filter to genuine non-transit windows
     non_transit_mask = meta_df["center_time"].apply(
