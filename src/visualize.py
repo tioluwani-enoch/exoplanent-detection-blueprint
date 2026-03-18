@@ -59,4 +59,4 @@ plt.tight_layout()
 
 phase_path = os.path.join(PROJECT_ROOT, "outputs", "KIC_11446443_phasefolded.png")
 plt.savefig(phase_path, dpi=150)
-print(f"Phase folded plot saved to: {phase_path}")
+print(f"Phase folded plot saved to: {phase_path}") 
