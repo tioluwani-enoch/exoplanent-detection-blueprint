@@ -284,6 +284,21 @@ if __name__ == "__main__":
     print(f"  Recall limitation: feature space depth (3 features from flux_in/flux_out)")
     print(f"  Improvement path: ingress/egress slope + secondary eclipse depth")
 
+    # Add model predictions to features CSV
+    # This is what visualize.py needs — model predictions, not training labels
+    features_df = pd.read_csv(FEATURES_CSV)
+    X_all        = features_df[FEATURE_COLS].values
+    X_all_scaled = scaler.transform(X_all)
+
+    features_df["predicted"]         = clf.predict(X_all_scaled)
+    features_df["prediction_proba"]  = clf.predict_proba(X_all_scaled)[:, 1]
+    features_df["predicted_transit"] = (
+        features_df["prediction_proba"] >= OPERATING_THRESHOLD
+    ).astype(int)
+
+    features_df.to_csv(FEATURES_CSV, index=False)
+    print(f"\n  Added predicted, prediction_proba, predicted_transit columns → {FEATURES_CSV}")
+    
     # Save model
     save_model(clf, scaler, MODEL_OUT)
 
