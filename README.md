@@ -1,6 +1,10 @@
 # Exoplanet Detection via Machine Learning on Kepler Light Curves
 
-A machine learning pipeline for detecting and classifying exoplanet transits from Kepler space telescope photometry data. Built as a collaborative project between a CS Lead [Tioluwani Enoch (@tioluwani-enoch)] (pipeline, ML) and a Physics Lead [Jacob Calan-Tolle (@jactlle)] (astrophysical validation, feature design).
+A machine learning pipeline for detecting and classifying exoplanet transits from Kepler space telescope photometry data.
+
+**Team**
+- **Tioluwani Enoch**: CS Lead (Pipeline Development, Machine Learning)
+- **Jacob Calan-Tolle**: Physics Lead (Astrophysical Validation, Feature Engineering)
 
 ---
 
@@ -143,15 +147,22 @@ Random Forest with `class_weight='balanced'` on 3 physics features across 8 targ
 
 **Honest limitations:**
 
-The 0.974 CV ROC-AUC confirms the model has genuinely learned the physics of transit vs EB distinction. The recall ceiling (0.589) is a feature space limitation — 3 features derived from the same two flux measurements (flux_in, flux_out) hit a generalization ceiling on a diverse multi-target dataset.
+The 0.974 CV ROC-AUC reflects strong performance on the training distribution. Test set ROC-AUC of 0.695 reflects expected generalization drop across 8 diverse Kepler targets — still well above random (0.5) and scientifically defensible for a 3-feature first-pass model.
 
-Identified improvement path: ingress/egress slope and secondary eclipse depth — deferred to Phase 5 to avoid scope creep.
+The precision/recall at the operating threshold (0.855/0.589) remains valid. The generalization gap is attributed to:
+- 3 features derived from the same two measurements (flux_in, flux_out) lack the contextual signal to distinguish noisy active stars from quiet ones
+- A 1% dip on a quiet star (Kepler-7b) means something different than a 1% dip on an active star (Kepler-17b) — the model has no stellar noise context
+
+**Identified improvement path (Phase 5):**
+- Option B: Per-star normalization of norm_depth and radius_ratio relative to each star's noise floor
+- Option C: Add stellar_noise as a 4th feature — std of flux outside all transit windows per star
+- Option D: ingress/egress slope + secondary eclipse depth
 
 ### Phase 4 — Visualization (`visualize.py`)
 
 *In progress.*
 
-### Phase 5 — Portfolio Packaging
+### Phase 5 — Portfolio Packaging (LinkedIn Maxxing)
 
 *In progress.*
 
@@ -216,26 +227,15 @@ Every preprocessing decision in this repo has been reviewed and approved by the 
 
 ## Key Physics Decisions Log
 
-| Decision | Rationale | Approved by |
-|---|---|---|
-| flatten() before numpy extraction | lightkurve loses trend metadata after .value extraction | Physics Lead |
-| Clip upward outliers only | Transits are always negative dips — planets block light, never add it | Physics Lead |
-| window_length=1001 for flatten | Must be ≥10× transit duration to avoid fitting through transit bottoms | Physics Lead |
-| Median normalization via lightkurve | Manual divide after flatten = double normalization, kills transit signal | Physics Lead |
-| 2× duration buffer for negative sampling | Prevents real transits being mislabeled as negatives | Physics Lead |
-| EB eclipse windows labeled 0 only | Non-eclipse EB windows excluded — baseline already covered by planet negatives | Physics Lead |
-| threshold=0.10 operating point | recall-heavy by design — Physics Lead validates false positives manually | Physics Lead |
-
----
-
-## Resume Bullets
-
-- Built end-to-end Kepler exoplanet detection pipeline in Python using `lightkurve`, `astropy`, and `scikit-learn` across 8 confirmed targets
-- Preprocessed 500,000+ photometric cadences across 8 Kepler targets with physics-informed detrending, gap analysis, and windowing
-- Trained Random Forest classifier achieving CV ROC-AUC of 0.974 on planet transit vs eclipsing binary classification
-- Designed dual-output windowing system separating raw fractional flux (feature extraction) from ML-normalized windows (model input)
-- Diagnosed and resolved triple-normalization bug that was washing out transit signals — recovered 1.44% depth from TrES-2b
-- Collaborated across CS/Physics domains with documented physics approval checkpoints at every pipeline stage
+| Decision | Rationale |
+|---|---|
+| flatten() before numpy extraction | lightkurve loses trend metadata after .value extraction |
+| Clip upward outliers only | Transits are always negative dips — planets block light, never add it |
+| window_length=1001 for flatten | Must be ≥10× transit duration to avoid fitting through transit bottoms |
+| Median normalization via lightkurve | Manual divide after flatten = double normalization, kills transit signal |
+| 2× duration buffer for negative sampling | Prevents real transits being mislabeled as negatives |
+| EB eclipse windows labeled 0 only | Non-eclipse EB windows excluded — baseline already covered by planet negatives |
+| threshold=0.10 operating point | recall-heavy by design — Physics Lead validates false positives manually |
 
 ---
 
@@ -244,3 +244,5 @@ Every preprocessing decision in this repo has been reviewed and approved by the 
 - Light curves: [MAST Archive](https://mast.stsci.edu) via `lightkurve`
 - Planet parameters: [NASA Exoplanet Archive](https://exoplanetarchive.ipac.caltech.edu)
 - Eclipsing binary catalog: [Kepler EB Catalog — Villanova/MAST](https://archive.stsci.edu/kepler/eclipsing_binaries.html)
+
+---

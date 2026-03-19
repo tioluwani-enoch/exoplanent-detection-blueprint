@@ -53,7 +53,7 @@ def plot_full_lightcurve(kic_id):
 
     detections     = feats[feats["label"] == 1]
     duration_hours = feats["duration_hours"].iloc[0] if len(feats) > 0 else 1.7
-    half_dur = max(duration_hours / 24) / 2
+    half_dur       = (duration_hours / 24) / 2
 
     fig, axes = plt.subplots(2, 1, figsize=(16, 7), sharex=True)
 
