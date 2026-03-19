@@ -244,5 +244,3 @@ Every preprocessing decision in this repo has been reviewed and approved by the 
 - Light curves: [MAST Archive](https://mast.stsci.edu) via `lightkurve`
 - Planet parameters: [NASA Exoplanet Archive](https://exoplanetarchive.ipac.caltech.edu)
 - Eclipsing binary catalog: [Kepler EB Catalog — Villanova/MAST](https://archive.stsci.edu/kepler/eclipsing_binaries.html)
-
----
