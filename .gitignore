@@ -24,9 +24,6 @@ data/processed/
 *.h5
 *.hdf5
 
-# Outputs
-outputs/
-
 # OS
 .DS_Store
 Thumbs.db
