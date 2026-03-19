@@ -80,3 +80,5 @@ for lc in lc_collection:
 results = pd.DataFrame(records)
 print(f"\nExtracted parameters for {len(results)} quarters")
 print(results[["kic_id", "quarter", "t_eff_k", "log_g", "stellar_rad_rs", "kepmag", "flux_std"]].to_string())
+
+results.to_csv(os.path.join(PROJECT_ROOT, "data", "processed", "stellar_params.csv"), index=False)
