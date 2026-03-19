@@ -150,39 +150,28 @@ def plot_phase_folded(kic_id):
 # ── Plot 3: Physical parameters summary ──────────────────────────────────────
 
 def plot_physical_params():
-    feats = load_features()
-    if feats is None:
+    # Read directly from detection_results.csv so plot always matches the CSV
+    results_path = os.path.join(OUTPUTS_DIR, "detection_results.csv")
+    if not os.path.exists(results_path):
+        print("  detection_results.csv not found — run export_results_csv() first")
         return
 
-    if "planet_radius_Rjup" not in feats.columns or \
-       "orbital_distance_AU" not in feats.columns:
-        print("  planet_radius_Rjup / orbital_distance_AU columns not found")
-        print("  Skipping physical params plot — run Phase 4 calculations first")
+    summary = pd.read_csv(results_path)
+
+    if "planet_radius_Rjup" not in summary.columns or \
+       "orbital_distance_AU" not in summary.columns:
+        print("  planet_radius_Rjup / orbital_distance_AU columns not found in results CSV")
         return
 
-    planets = feats[
-        (feats["label"] == 1) &
-        feats["planet_radius_Rjup"].notna() &
-        feats["orbital_distance_AU"].notna()
-    ]
+    summary = summary.dropna(subset=["planet_radius_Rjup", "orbital_distance_AU"])
 
-    if len(planets) == 0:
-        print("  No planet radius / orbital distance data yet — skipping")
+    if len(summary) == 0:
+        print("  No physical parameter data to plot")
         return
-
-    summary = planets.groupby("kic_id").agg(
-        planet_radius_Rjup  = ("planet_radius_Rjup",  "median"),
-        orbital_distance_AU = ("orbital_distance_AU", "median"),
-        norm_depth          = ("norm_depth",           "median"),
-    ).reset_index()
-
-    summary["name"] = summary["kic_id"].map(
-        {k: v["name"] for k, v in TARGETS.items()}
-    ).fillna(summary["kic_id"].astype(str))
 
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
-    axes[0].barh(summary["name"], summary["planet_radius_Rjup"],
+    axes[0].barh(summary["planet_name"], summary["planet_radius_Rjup"],
                  color="steelblue", edgecolor="white")
     axes[0].axvline(1.0, color="orange", linestyle="--",
                     linewidth=1.2, label="1 Jupiter radius")
@@ -190,7 +179,7 @@ def plot_physical_params():
     axes[0].set_title("Estimated Planet Radii")
     axes[0].legend()
 
-    axes[1].barh(summary["name"], summary["orbital_distance_AU"],
+    axes[1].barh(summary["planet_name"], summary["orbital_distance_AU"],
                  color="coral", edgecolor="white")
     axes[1].axvline(1.0, color="green", linestyle="--",
                     linewidth=1.2, label="1 AU (Earth orbit)")
@@ -260,7 +249,7 @@ if __name__ == "__main__":
         plot_phase_folded(kic_id)
 
     print("\nGenerating summary plots...")
-    plot_physical_params()
     export_results_csv()
+    plot_physical_params()
 
     print("\nDone. All plots saved to /outputs/")
