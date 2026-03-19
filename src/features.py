@@ -13,14 +13,14 @@ NORM_DEPTH_MIN = 0.0005
 
 # Hardcoded fallback — overridden automatically if ingest.py has saved stellar_params.csv
 STELLAR_PARAMS = {
-    11446443: {"radius_rsun": 1.000, "mass_msun": 0.980},
-    5780885:  {"radius_rsun": 2.020, "mass_msun": 1.350},
-    11853905: {"radius_rsun": 1.487, "mass_msun": 1.223},
-    10619192: {"radius_rsun": 1.045, "mass_msun": 1.160},
-    10874614: {"radius_rsun": 1.391, "mass_msun": 1.209},
-    6922244:  {"radius_rsun": 1.486, "mass_msun": 1.213},
-    6541920:  {"radius_rsun": 1.065, "mass_msun": 0.961},
-    11904151: {"radius_rsun": 1.065, "mass_msun": 0.913},
+    11446443: {"radius_rsun": 1.000, "mass_msun": 0.980, "t_eff_k": 5850.0},
+    5780885:  {"radius_rsun": 2.020, "mass_msun": 1.350, "t_eff_k": 5933.0},
+    11853905: {"radius_rsun": 1.487, "mass_msun": 1.223, "t_eff_k": 5857.0},
+    10619192: {"radius_rsun": 1.045, "mass_msun": 1.160, "t_eff_k": 5630.0},
+    10874614: {"radius_rsun": 1.391, "mass_msun": 1.209, "t_eff_k": 5647.0},
+    6922244:  {"radius_rsun": 1.486, "mass_msun": 1.213, "t_eff_k": 6213.0},
+    6541920:  {"radius_rsun": 1.065, "mass_msun": 0.961, "t_eff_k": 5680.0},
+    11904151: {"radius_rsun": 1.065, "mass_msun": 0.913, "t_eff_k": 5627.0},
 }
 
 
@@ -36,6 +36,7 @@ def load_stellar_params():
         # Use median across quarters to get one value per star
         df_agg = df.groupby("kic_id").agg(
             stellar_rad_rs=("stellar_rad_rs", "median"),
+            t_eff_k=("t_eff_k", "median"),
         ).reset_index()
         params = {}
         for _, row in df_agg.iterrows():
@@ -45,8 +46,9 @@ def load_stellar_params():
                 "radius_rsun": float(row["stellar_rad_rs"])
                                if pd.notna(row["stellar_rad_rs"])
                                else fallback["radius_rsun"],
-                # Mass not in FITS headers — keep hardcoded fallback
                 "mass_msun": fallback["mass_msun"],
+                "t_eff_k": float(row["t_eff_k"])
+                           if pd.notna(row["t_eff_k"]) else 5778.0,
             }
         print(f"  Loaded stellar params from CSV for {len(params)} targets")
         return params
@@ -56,10 +58,11 @@ def load_stellar_params():
 
 # ── FEATURE COMPUTATION ───────────────────────────────────────────────────────
 
-def compute_features(period, duration, flux_out, flux_in):
+def compute_features(period, duration, flux_out, flux_in, t_eff_k=5778.0):
     norm_depth = (flux_out - flux_in) / flux_out if flux_out != 0 else 0.0
+    norm_depth_corrected = correct_depth_for_limb_darkening(norm_depth, t_eff_k)
     dur_period_ratio = duration / period
-    radius_ratio = norm_depth ** 0.5 if norm_depth > 0 else 0.0
+    radius_ratio = norm_depth_corrected ** 0.5 if norm_depth_corrected > 0 else 0.0
 
     if not (NORM_DEPTH_MIN < norm_depth < 0.1):
         return None
@@ -146,6 +149,19 @@ def compute_secondary_depth(lc_df, center_time, period_days, duration_hours):
 
 # ── PHYSICAL PARAMETER DERIVATION ─────────────────────────────────────────────
 
+def correct_depth_for_limb_darkening(norm_depth, t_eff_k):
+    """
+    Quadratic limb darkening correction (Mandel & Agol 2002).
+    Coefficients approximated from Claret (2011) Kepler bandpass.
+    Valid for solar-type stars 4500K < Teff < 7000K.
+    """
+    teff = t_eff_k if (t_eff_k and not np.isnan(float(t_eff_k))) else 5778.0
+    u1 = np.clip(0.6 - 0.0001 * (teff - 5778), 0.1, 0.9)
+    u2 = np.clip(0.1 + 0.00005 * (teff - 5778), 0.0, 0.5)
+    correction = (1 - u1 / 3 - u2 / 6) ** 2
+    return norm_depth / correction
+
+
 def compute_physical_params(radius_ratio, period_days, kic_id, stellar_params=None):
     """
     Derive planet radius (R_Jup) and orbital distance (AU) from
@@ -197,7 +213,7 @@ def compute_flux_in_out(lc_df, center_time, duration_hours, period_days):
         return None, None
 
     return (
-        np.nanmedian(in_transit["flux_norm"].values),
+        np.nanmin(in_transit["flux_norm"].values),     # true transit floor, not biased median
         np.nanmedian(out_transit["flux_norm"].values),
     )
 
@@ -247,7 +263,9 @@ def process_one_target(kic_id, meta_df, lc_df, stellar_params=None):
             rejected += 1
             continue
 
-        features = compute_features(period_days, duration_hours / 24, flux_out, flux_in)
+        t_eff = stellar_params.get(int(kic_id), {}).get("t_eff_k", 5778.0) \
+                if stellar_params else 5778.0
+        features = compute_features(period_days, duration_hours / 24, flux_out, flux_in, t_eff)
         if features is None:
             rejected += 1
             continue
