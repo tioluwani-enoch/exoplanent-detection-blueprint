@@ -86,7 +86,7 @@ def process_one_target(kic_id, meta_df, lc_df):
     period_days    = meta_df["period_days"].iloc[0]
     duration_hours = meta_df["duration_hours"].iloc[0]
     t0_bkjd        = meta_df["center_time"].min()
-    label          = int(meta_df["label"].iloc[0])
+    is_eb          = int(meta_df["label"].iloc[0]) == 0
 
     records  = []
     rejected = 0
@@ -105,24 +105,49 @@ def process_one_target(kic_id, meta_df, lc_df):
             rejected += 1
             continue
 
-        records.append({
-            "kic_id":            kic_id,
-            "window_index":      row["window_index"],
-            "center_time":       row["center_time"],
-            "label":             1,
-            "period_days":       period_days,
-            "duration_hours":    duration_hours,
-            "flux_out":          flux_out,
-            "flux_in":           flux_in,
-            "norm_depth":        features["norm_depth"],
-            "dur_period_ratio":  features["dur_period_ratio"],
-            "radius_ratio":      features["radius_ratio"],
-        })
+        if is_eb:
+            # Option B (physics-approved):
+            # EB eclipse windows labeled 0 — these are the false positive signal
+            # EB non-eclipse windows excluded entirely — already represented
+            # by out-of-transit windows from planet targets
+            records.append({
+                "kic_id":            kic_id,
+                "window_index":      row["window_index"],
+                "center_time":       row["center_time"],
+                "label":             0,
+                "period_days":       period_days,
+                "duration_hours":    duration_hours,
+                "flux_out":          flux_out,
+                "flux_in":           flux_in,
+                "norm_depth":        features["norm_depth"],
+                "dur_period_ratio":  features["dur_period_ratio"],
+                "radius_ratio":      features["radius_ratio"],
+            })
+        else:
+            records.append({
+                "kic_id":            kic_id,
+                "window_index":      row["window_index"],
+                "center_time":       row["center_time"],
+                "label":             1,
+                "period_days":       period_days,
+                "duration_hours":    duration_hours,
+                "flux_out":          flux_out,
+                "flux_in":           flux_in,
+                "norm_depth":        features["norm_depth"],
+                "dur_period_ratio":  features["dur_period_ratio"],
+                "radius_ratio":      features["radius_ratio"],
+            })
 
-    positives_df = pd.DataFrame(records)
-    n_pos        = len(positives_df)
+    target_df = pd.DataFrame(records)
 
-    # Sample negatives — physics filter NOT applied
+    if is_eb:
+        # No negatives sampled for EB — eclipse windows ARE the negatives
+        print(f"  KIC {kic_id} (EB): {len(target_df)} eclipse windows labeled 0, "
+              f"{rejected} rejected")
+        return target_df
+
+    # Planet target — sample matching negatives
+    n_pos       = len(target_df)
     neg_windows = sample_negatives(
         meta_df, n_pos, period_days, duration_hours, t0_bkjd
     )
@@ -154,12 +179,11 @@ def process_one_target(kic_id, meta_df, lc_df):
         })
 
     negatives_df = pd.DataFrame(neg_records)
-    combined     = pd.concat([positives_df, negatives_df], ignore_index=True)
+    combined     = pd.concat([target_df, negatives_df], ignore_index=True)
 
     print(f"  KIC {kic_id}: {n_pos} positives, "
           f"{len(negatives_df)} negatives, {rejected} rejected")
     return combined
-
 
 def build_combined_feature_dataset():
     combined_meta = pd.read_csv(os.path.join(PROCESSED_DIR, "combined_meta.csv"))
@@ -181,6 +205,7 @@ def build_combined_feature_dataset():
         print("No features extracted.")
         return None
 
+    final_df = pd.concat(all_records, ignore_index=True)
     final_df = pd.concat(all_records, ignore_index=True)
     final_df = final_df.sample(frac=1, random_state=RANDOM_SEED).reset_index(drop=True)
     final_df.to_csv(OUTPUT_CSV, index=False)
