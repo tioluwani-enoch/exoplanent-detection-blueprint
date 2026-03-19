@@ -1,6 +1,10 @@
 # Exoplanet Detection via Machine Learning on Kepler Light Curves
 
-A machine learning pipeline for detecting and classifying exoplanet transits from Kepler space telescope photometry data. Built as a collaborative project between a CS Lead [Tioluwani Enoch (@tioluwani-enoch)] (pipeline, ML) and a Physics Lead [Jacob Calan-Tolle (@jactlle)] (astrophysical validation, feature design).
+A machine learning pipeline for detecting and classifying exoplanet transits from Kepler space telescope photometry data.
+
+**Team**
+- **Tioluwani Enoch** — CS Lead (Pipeline Development, Machine Learning)
+- **Jacob Calan-Tolle** — Physics Lead (Astrophysical Validation, Feature Engineering)
 
 ---
 
@@ -151,7 +155,7 @@ Identified improvement path: ingress/egress slope and secondary eclipse depth �
 
 *In progress.*
 
-### Phase 5 — Portfolio Packaging
+### Phase 5 — Portfolio Packaging (LinkedIn Maxxing)
 
 *In progress.*
 
@@ -228,7 +232,15 @@ Every preprocessing decision in this repo has been reviewed and approved by the 
 
 ---
 
-## Resume Bullets
+## Data Sources
+
+- Light curves: [MAST Archive](https://mast.stsci.edu) via `lightkurve`
+- Planet parameters: [NASA Exoplanet Archive](https://exoplanetarchive.ipac.caltech.edu)
+- Eclipsing binary catalog: [Kepler EB Catalog — Villanova/MAST](https://archive.stsci.edu/kepler/eclipsing_binaries.html)
+
+---
+
+## Summary
 
 - Built end-to-end Kepler exoplanet detection pipeline in Python using `lightkurve`, `astropy`, and `scikit-learn` across 8 confirmed targets
 - Preprocessed 500,000+ photometric cadences across 8 Kepler targets with physics-informed detrending, gap analysis, and windowing
@@ -236,11 +248,3 @@ Every preprocessing decision in this repo has been reviewed and approved by the 
 - Designed dual-output windowing system separating raw fractional flux (feature extraction) from ML-normalized windows (model input)
 - Diagnosed and resolved triple-normalization bug that was washing out transit signals — recovered 1.44% depth from TrES-2b
 - Collaborated across CS/Physics domains with documented physics approval checkpoints at every pipeline stage
-
----
-
-## Data Sources
-
-- Light curves: [MAST Archive](https://mast.stsci.edu) via `lightkurve`
-- Planet parameters: [NASA Exoplanet Archive](https://exoplanetarchive.ipac.caltech.edu)
-- Eclipsing binary catalog: [Kepler EB Catalog — Villanova/MAST](https://archive.stsci.edu/kepler/eclipsing_binaries.html)
