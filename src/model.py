@@ -16,7 +16,7 @@ PROCESSED_DIR = os.path.join(PROJECT_ROOT, "data", "processed")
 OUTPUTS_DIR   = os.path.join(PROJECT_ROOT, "outputs")
 os.makedirs(OUTPUTS_DIR, exist_ok=True)
 
-FEATURES_CSV  = os.path.join(PROCESSED_DIR, "KIC_11446443_features.csv")
+FEATURES_CSV  = os.path.join(PROCESSED_DIR, "combined_features.csv")
 WINDOWS_ML    = os.path.join(PROCESSED_DIR, "KIC_11446443", "windows_ml.npy")
 META_CSV      = os.path.join(PROCESSED_DIR, "KIC_11446443", "meta.csv")
 MODEL_OUT     = os.path.join(OUTPUTS_DIR,   "random_forest.joblib")

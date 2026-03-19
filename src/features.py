@@ -3,28 +3,20 @@ import pandas as pd
 import os
 
 PROJECT_ROOT   = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-LIGHTCURVE_CSV = os.path.join(PROJECT_ROOT, "data", "processed", "KIC_11446443_lightcurve.csv")
-PARAMS_CSV     = os.path.join(PROJECT_ROOT, "data", "processed", "meta.csv")
-WINDOWS_ML     = os.path.join(PROJECT_ROOT, "data", "processed", "windows_ml.npy")
-OUTPUT_CSV     = os.path.join(PROJECT_ROOT, "data", "processed", "KIC_11446443_features.csv")
+PROCESSED_DIR  = os.path.join(PROJECT_ROOT, "data", "processed")
+LIGHTCURVE_DIR = PROCESSED_DIR
+OUTPUT_CSV     = os.path.join(PROCESSED_DIR, "combined_features.csv")
 
-PERIOD_DAYS    = 2.47063
-DURATION_HOURS = 1.7
-T0_BKJD        = 120.595
 RANDOM_SEED    = 42
+NORM_DEPTH_MIN = 0.0005   # lowered from 0.001 — physics-approved
 
 
-def compute_features(period, duration, depth_raw, flux_out, flux_in, stellar_radius):
-    """
-    Transform raw transit parameters into physically grounded ML features.
-    Returns None if values fall outside physically valid ranges.
-    Physics filter — only applied to POSITIVE candidates, never to negatives.
-    """
-    norm_depth       = (flux_out - flux_in) / flux_out
+def compute_features(period, duration, flux_out, flux_in):
+    norm_depth       = (flux_out - flux_in) / flux_out if flux_out != 0 else 0.0
     dur_period_ratio = duration / period
     radius_ratio     = norm_depth ** 0.5 if norm_depth > 0 else 0.0
 
-    if not (0.001 < norm_depth < 0.1):
+    if not (NORM_DEPTH_MIN < norm_depth < 0.1):
         return None
     if not (0.5 < period < 500):
         return None
@@ -39,17 +31,13 @@ def compute_features(period, duration, depth_raw, flux_out, flux_in, stellar_rad
 
 
 def compute_flux_in_out(lc_df, center_time, duration_hours, period_days):
-    """
-    Compute flux_in and flux_out for a given window from the light curve.
-    """
     half_duration = (duration_hours / 24) / 2
+    half_window   = period_days / 2
 
     in_transit = lc_df[
         (lc_df["time_BKJD"] >= center_time - half_duration) &
         (lc_df["time_BKJD"] <= center_time + half_duration)
     ]
-
-    half_window = period_days / 2
     out_transit = lc_df[
         (lc_df["time_BKJD"] >= center_time - half_window) &
         (lc_df["time_BKJD"] <= center_time + half_window) &
@@ -62,99 +50,68 @@ def compute_flux_in_out(lc_df, center_time, duration_hours, period_days):
     if len(in_transit) == 0 or len(out_transit) == 0:
         return None, None
 
-    flux_in  = np.nanmedian(in_transit["flux_norm"].values)
-    flux_out = np.nanmedian(out_transit["flux_norm"].values)
-    return flux_in, flux_out
+    return (
+        np.nanmedian(in_transit["flux_norm"].values),
+        np.nanmedian(out_transit["flux_norm"].values)
+    )
 
 
-def sample_negatives(meta_df, n_samples, positive_centers):
-    """
-    Sample genuine non-transit windows from meta.csv.
-    Physics-approved rules:
-      - Center times must fall well outside ±(duration/2) of any known transit
-      - Randomly sampled with fixed seed for reproducibility
-      - Physics filter is NOT applied — negatives don't need transit validation
-    """
-    half_dur_days = (DURATION_HOURS / 24.0) / 2.0
+def sample_negatives(meta_df, n_samples, period_days, duration_hours, t0_bkjd):
+    half_dur_days = (duration_hours / 24.0) / 2.0
+    t_start       = meta_df["center_time"].min()
+    t_end         = meta_df["center_time"].max()
+    n_transits    = int((t_end - t_start) / period_days) + 2
 
-    # Build all known transit centers from ephemeris
-    t_start = meta_df["center_time"].min()
-    t_end   = meta_df["center_time"].max()
-    n_transits = int((t_end - t_start) / PERIOD_DAYS) + 2
     transit_centers = np.array([
-        T0_BKJD + i * PERIOD_DAYS
+        t0_bkjd + i * period_days
         for i in range(-5, n_transits + 5)
     ])
 
     def is_near_transit(t):
-        # Exclude windows within 2x the transit half-duration of any transit center
-        # 2x gives a clean buffer without excluding the entire light curve
         return np.any(np.abs(t - transit_centers) < half_dur_days * 2)
 
-    # Filter to genuine non-transit windows
-    non_transit_mask = meta_df["center_time"].apply(
-        lambda t: not is_near_transit(t)
+    non_transit_mask = meta_df["center_time"].apply(lambda t: not is_near_transit(t))
+    non_transit_df   = meta_df[non_transit_mask].reset_index(drop=True)
+
+    rng        = np.random.default_rng(RANDOM_SEED)
+    sample_idx = rng.choice(
+        len(non_transit_df),
+        size=min(n_samples, len(non_transit_df)),
+        replace=False
     )
-    non_transit_df = meta_df[non_transit_mask].reset_index(drop=True)
-
-    print(f"  Non-transit windows available: {len(non_transit_df)}")
-
-    # Sample reproducibly
-    rng         = np.random.default_rng(RANDOM_SEED)
-    sample_idx  = rng.choice(len(non_transit_df), size=min(n_samples, len(non_transit_df)), replace=False)
-    sampled     = non_transit_df.iloc[sample_idx].reset_index(drop=True)
-
-    return sampled
+    return non_transit_df.iloc[sample_idx].reset_index(drop=True)
 
 
-def build_feature_dataset(params_csv, lightcurve_csv, output_csv):
-    """
-    1. Extract positive samples using physics filter
-    2. Sample equal number of negatives from non-transit windows
-    3. Combine into balanced training dataset
-    4. Save to CSV
-    """
-    df    = pd.read_csv(params_csv)
-    lc_df = pd.read_csv(lightcurve_csv)
-    print(f"Loaded {len(df)} windows from {params_csv}")
+def process_one_target(kic_id, meta_df, lc_df):
+    period_days    = meta_df["period_days"].iloc[0]
+    duration_hours = meta_df["duration_hours"].iloc[0]
+    t0_bkjd        = meta_df["center_time"].min()
+    label          = int(meta_df["label"].iloc[0])
 
-    # ── Positive samples ──────────────────────────────────────────
     records  = []
     rejected = 0
 
-    for _, row in df.iterrows():
+    for _, row in meta_df.iterrows():
         flux_in, flux_out = compute_flux_in_out(
-            lc_df,
-            center_time    = row["center_time"],
-            duration_hours = row["duration_hours"],
-            period_days    = row["period_days"]
+            lc_df, row["center_time"], duration_hours, period_days
         )
-
-        if flux_in is None or flux_out is None:
+        if flux_in is None:
             rejected += 1
             continue
 
-        features = compute_features(
-            period         = row["period_days"],
-            duration       = row["duration_hours"] / 24,
-            depth_raw      = row["depth_raw"],
-            flux_out       = flux_out,
-            flux_in        = flux_in,
-            stellar_radius = row.get("stellar_radius_rs", np.nan),
-        )
-
+        features = compute_features(period_days, duration_hours / 24,
+                                    flux_out, flux_in)
         if features is None:
             rejected += 1
             continue
 
         records.append({
-            "kic_id":            row["kic_id"],
+            "kic_id":            kic_id,
             "window_index":      row["window_index"],
             "center_time":       row["center_time"],
             "label":             1,
-            "stellar_radius_rs": row.get("stellar_radius_rs", np.nan),
-            "period_days":       row["period_days"],
-            "duration_hours":    row["duration_hours"],
+            "period_days":       period_days,
+            "duration_hours":    duration_hours,
             "flux_out":          flux_out,
             "flux_in":           flux_in,
             "norm_depth":        features["norm_depth"],
@@ -163,71 +120,81 @@ def build_feature_dataset(params_csv, lightcurve_csv, output_csv):
         })
 
     positives_df = pd.DataFrame(records)
-    n_positives  = len(positives_df)
-    print(f"\n  Positive samples (transit):     {n_positives}")
-    print(f"  Rejected by physics filter:     {rejected}")
+    n_pos        = len(positives_df)
 
-    # ── Negative samples ──────────────────────────────────────────
-    # Sample equal number of non-transit windows
-    # Physics filter NOT applied — negatives just need to be non-transit
+    # Sample negatives — physics filter NOT applied
     neg_windows = sample_negatives(
-        df,
-        n_samples        = n_positives,
-        positive_centers = positives_df["center_time"].values
+        meta_df, n_pos, period_days, duration_hours, t0_bkjd
     )
 
     neg_records = []
     for _, row in neg_windows.iterrows():
         flux_in, flux_out = compute_flux_in_out(
-            lc_df,
-            center_time    = row["center_time"],
-            duration_hours = DURATION_HOURS,
-            period_days    = PERIOD_DAYS
+            lc_df, row["center_time"], duration_hours, period_days
         )
-
-        if flux_in is None or flux_out is None:
+        if flux_in is None:
             continue
 
-        norm_depth       = (flux_out - flux_in) / flux_out if flux_out != 0 else 0.0
-        dur_period_ratio = (DURATION_HOURS / 24.0) / PERIOD_DAYS
-        radius_ratio     = norm_depth ** 0.5 if norm_depth > 0 else 0.0
+        nd  = (flux_out - flux_in) / flux_out if flux_out != 0 else 0.0
+        dpr = (duration_hours / 24.0) / period_days
+        rr  = nd ** 0.5 if nd > 0 else 0.0
 
         neg_records.append({
-            "kic_id":            row["kic_id"],
+            "kic_id":            kic_id,
             "window_index":      row["window_index"],
             "center_time":       row["center_time"],
             "label":             0,
-            "stellar_radius_rs": row.get("stellar_radius_rs", np.nan),
-            "period_days":       PERIOD_DAYS,
-            "duration_hours":    DURATION_HOURS,
+            "period_days":       period_days,
+            "duration_hours":    duration_hours,
             "flux_out":          flux_out,
             "flux_in":           flux_in,
-            "norm_depth":        norm_depth,
-            "dur_period_ratio":  dur_period_ratio,
-            "radius_ratio":      radius_ratio,
+            "norm_depth":        nd,
+            "dur_period_ratio":  dpr,
+            "radius_ratio":      rr,
         })
 
     negatives_df = pd.DataFrame(neg_records)
-    print(f"  Negative samples (no transit):  {len(negatives_df)}")
+    combined     = pd.concat([positives_df, negatives_df], ignore_index=True)
 
-    # ── Combine + save ────────────────────────────────────────────
-    combined_df = pd.concat([positives_df, negatives_df], ignore_index=True)
-    combined_df = combined_df.sample(frac=1, random_state=RANDOM_SEED).reset_index(drop=True)
+    print(f"  KIC {kic_id}: {n_pos} positives, "
+          f"{len(negatives_df)} negatives, {rejected} rejected")
+    return combined
 
-    os.makedirs(os.path.dirname(output_csv), exist_ok=True)
-    combined_df.to_csv(output_csv, index=False)
+
+def build_combined_feature_dataset():
+    combined_meta = pd.read_csv(os.path.join(PROCESSED_DIR, "combined_meta.csv"))
+    all_records   = []
+
+    for kic_id, group in combined_meta.groupby("kic_id"):
+        kic_id   = int(kic_id)
+        lc_path  = os.path.join(LIGHTCURVE_DIR, f"KIC_{kic_id}_lightcurve.csv")
+
+        if not os.path.exists(lc_path):
+            print(f"  KIC {kic_id}: light curve CSV not found — skipping")
+            continue
+
+        lc_df    = pd.read_csv(lc_path)
+        result   = process_one_target(kic_id, group.reset_index(drop=True), lc_df)
+        all_records.append(result)
+
+    if not all_records:
+        print("No features extracted.")
+        return None
+
+    final_df = pd.concat(all_records, ignore_index=True)
+    final_df = final_df.sample(frac=1, random_state=RANDOM_SEED).reset_index(drop=True)
+    final_df.to_csv(OUTPUT_CSV, index=False)
 
     print(f"\nFeature extraction complete:")
-    print(f"  Total samples:   {len(combined_df)}")
-    print(f"  Positives:       {int(combined_df['label'].sum())}")
-    print(f"  Negatives:       {int((combined_df['label'] == 0).sum())}")
-    print(f"  Output saved to: {output_csv}")
-    print(f"\nSample output:")
-    print(combined_df[["kic_id", "label", "norm_depth",
-                        "dur_period_ratio", "radius_ratio"]].head(10).to_string())
+    print(f"  Total samples:  {len(final_df)}")
+    print(f"  Positives:      {int(final_df['label'].sum())}")
+    print(f"  Negatives:      {int((final_df['label'] == 0).sum())}")
+    print(f"  Output → {OUTPUT_CSV}")
+    print(f"\nPer-target breakdown:")
+    print(final_df.groupby(["kic_id", "label"]).size().unstack(fill_value=0).to_string())
 
-    return combined_df
+    return final_df
 
 
 if __name__ == "__main__":
-    build_feature_dataset(PARAMS_CSV, LIGHTCURVE_CSV, OUTPUT_CSV)
+    build_combined_feature_dataset()
