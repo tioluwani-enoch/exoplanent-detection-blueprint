@@ -53,7 +53,7 @@ def plot_full_lightcurve(kic_id):
 
     detections     = feats[feats["label"] == 1]
     duration_hours = feats["duration_hours"].iloc[0] if len(feats) > 0 else 1.7
-    half_dur       = (duration_hours / 24) / 2
+    half_dur = max(duration_hours / 24) / 2
 
     fig, axes = plt.subplots(2, 1, figsize=(16, 7), sharex=True)
 
@@ -129,11 +129,9 @@ def plot_physical_params():
                     feats["orbital_distance_AU"].notna()]
 
     # One row per KIC ID — median values
-    summary = planets.groupby("kic_id").agg(
-        planet_radius_Rjup  = ("planet_radius_Rjup",  "median"),
-        orbital_distance_AU = ("orbital_distance_AU", "median"),
-        norm_depth          = ("norm_depth",           "median"),
-    ).reset_index()
+    summary = planets.loc[planets.groupby("kic_id")["norm_depth"].idxmax()][
+    ["kic_id", "planet_radius_Rjup", "orbital_distance_AU", "norm_depth"]
+].reset_index(drop=True)
 
     # Add planet names
     summary["name"] = summary["kic_id"].map(
