@@ -2,13 +2,26 @@ import numpy as np
 import pandas as pd
 import os
 
+
 PROJECT_ROOT   = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROCESSED_DIR  = os.path.join(PROJECT_ROOT, "data", "processed")
 LIGHTCURVE_DIR = PROCESSED_DIR
 OUTPUT_CSV     = os.path.join(PROCESSED_DIR, "combined_features.csv")
 
 RANDOM_SEED    = 42
-NORM_DEPTH_MIN = 0.0005   # lowered from 0.001 — physics-approved
+NORM_DEPTH_MIN = 0.0005
+
+# Stellar parameters per KIC ID (radius in solar radii, mass in solar masses)
+STELLAR_PARAMS = {
+    11446443: {"radius_rsun": 1.000, "mass_msun": 0.980},  # TrES-2 host
+    5780885:  {"radius_rsun": 2.020, "mass_msun": 1.350},  # Kepler-7
+    11853905: {"radius_rsun": 1.487, "mass_msun": 1.223},  # Kepler-4
+    10619192: {"radius_rsun": 1.045, "mass_msun": 1.160},  # Kepler-17
+    10874614: {"radius_rsun": 1.391, "mass_msun": 1.209},  # Kepler-6
+    6922244:  {"radius_rsun": 1.486, "mass_msun": 1.213},  # Kepler-8
+    6541920:  {"radius_rsun": 1.065, "mass_msun": 0.961},  # Kepler-11
+    11904151: {"radius_rsun": 1.065, "mass_msun": 0.913},  # Kepler-10
+}
 
 
 def compute_features(period, duration, flux_out, flux_in):
@@ -27,6 +40,31 @@ def compute_features(period, duration, flux_out, flux_in):
         "norm_depth":       norm_depth,
         "dur_period_ratio": dur_period_ratio,
         "radius_ratio":     radius_ratio,
+    }
+
+
+def compute_physical_params(radius_ratio, period_days, kic_id):
+    """
+    Convert dimensionless features into physical planet properties.
+    Returns planet radius in Jupiter radii and orbital distance in AU.
+    """
+    params = STELLAR_PARAMS.get(int(kic_id), {"radius_rsun": 1.0, "mass_msun": 1.0})
+
+    R_star_solar  = params["radius_rsun"]
+    M_star_solar  = params["mass_msun"]
+
+    # Planet radius: R_planet = radius_ratio * R_star
+    R_star_earth   = R_star_solar * 109.076          # 1 solar radius = 109.076 Earth radii
+    R_planet_earth = radius_ratio * R_star_earth
+    R_planet_jup   = R_planet_earth / 11.209          # 1 Jupiter radius = 11.209 Earth radii
+
+    # Orbital distance via Kepler's 3rd law: a^3 = M_star * P^2 (in solar units)
+    P_years = period_days / 365.25
+    a_AU    = (M_star_solar * P_years ** 2) ** (1 / 3)
+
+    return {
+        "planet_radius_Rjup": round(R_planet_jup, 4),
+        "orbital_distance_AU": round(a_AU, 5),
     }
 
 
@@ -105,48 +143,34 @@ def process_one_target(kic_id, meta_df, lc_df):
             rejected += 1
             continue
 
-        if is_eb:
-            # Option B (physics-approved):
-            # EB eclipse windows labeled 0 — these are the false positive signal
-            # EB non-eclipse windows excluded entirely — already represented
-            # by out-of-transit windows from planet targets
-            records.append({
-                "kic_id":            kic_id,
-                "window_index":      row["window_index"],
-                "center_time":       row["center_time"],
-                "label":             0,
-                "period_days":       period_days,
-                "duration_hours":    duration_hours,
-                "flux_out":          flux_out,
-                "flux_in":           flux_in,
-                "norm_depth":        features["norm_depth"],
-                "dur_period_ratio":  features["dur_period_ratio"],
-                "radius_ratio":      features["radius_ratio"],
-            })
-        else:
-            records.append({
-                "kic_id":            kic_id,
-                "window_index":      row["window_index"],
-                "center_time":       row["center_time"],
-                "label":             1,
-                "period_days":       period_days,
-                "duration_hours":    duration_hours,
-                "flux_out":          flux_out,
-                "flux_in":           flux_in,
-                "norm_depth":        features["norm_depth"],
-                "dur_period_ratio":  features["dur_period_ratio"],
-                "radius_ratio":      features["radius_ratio"],
-            })
+        # Physical params only meaningful for planet candidates (label=1)
+        phys = compute_physical_params(
+            features["radius_ratio"], period_days, kic_id
+        ) if not is_eb else {"planet_radius_Rjup": np.nan, "orbital_distance_AU": np.nan}
+
+        records.append({
+            "kic_id":               kic_id,
+            "window_index":         row["window_index"],
+            "center_time":          row["center_time"],
+            "label":                0 if is_eb else 1,
+            "period_days":          period_days,
+            "duration_hours":       duration_hours,
+            "flux_out":             flux_out,
+            "flux_in":              flux_in,
+            "norm_depth":           features["norm_depth"],
+            "dur_period_ratio":     features["dur_period_ratio"],
+            "radius_ratio":         features["radius_ratio"],
+            "planet_radius_Rjup":   phys["planet_radius_Rjup"],
+            "orbital_distance_AU":  phys["orbital_distance_AU"],
+        })
 
     target_df = pd.DataFrame(records)
 
     if is_eb:
-        # No negatives sampled for EB — eclipse windows ARE the negatives
         print(f"  KIC {kic_id} (EB): {len(target_df)} eclipse windows labeled 0, "
               f"{rejected} rejected")
         return target_df
 
-    # Planet target — sample matching negatives
     n_pos       = len(target_df)
     neg_windows = sample_negatives(
         meta_df, n_pos, period_days, duration_hours, t0_bkjd
@@ -165,17 +189,19 @@ def process_one_target(kic_id, meta_df, lc_df):
         rr  = nd ** 0.5 if nd > 0 else 0.0
 
         neg_records.append({
-            "kic_id":            kic_id,
-            "window_index":      row["window_index"],
-            "center_time":       row["center_time"],
-            "label":             0,
-            "period_days":       period_days,
-            "duration_hours":    duration_hours,
-            "flux_out":          flux_out,
-            "flux_in":           flux_in,
-            "norm_depth":        nd,
-            "dur_period_ratio":  dpr,
-            "radius_ratio":      rr,
+            "kic_id":               kic_id,
+            "window_index":         row["window_index"],
+            "center_time":          row["center_time"],
+            "label":                0,
+            "period_days":          period_days,
+            "duration_hours":       duration_hours,
+            "flux_out":             flux_out,
+            "flux_in":              flux_in,
+            "norm_depth":           nd,
+            "dur_period_ratio":     dpr,
+            "radius_ratio":         rr,
+            "planet_radius_Rjup":   np.nan,
+            "orbital_distance_AU":  np.nan,
         })
 
     negatives_df = pd.DataFrame(neg_records)
@@ -184,6 +210,7 @@ def process_one_target(kic_id, meta_df, lc_df):
     print(f"  KIC {kic_id}: {n_pos} positives, "
           f"{len(negatives_df)} negatives, {rejected} rejected")
     return combined
+
 
 def build_combined_feature_dataset():
     combined_meta = pd.read_csv(os.path.join(PROCESSED_DIR, "combined_meta.csv"))
@@ -207,15 +234,13 @@ def build_combined_feature_dataset():
 
     final_df = pd.concat(all_records, ignore_index=True)
 
-    # Cap EB eclipse windows to 200 (physics-approved)
-    # Target ratio: ~447 positives : ~200 negatives (2.2:1)
-    # Combined with class_weight='balanced' in RF to hit recall>=0.75, precision>=0.85
     eb_mask = (final_df["label"] == 0)
     if eb_mask.sum() > 200:
         eb_df     = final_df[eb_mask].sample(n=200, random_state=RANDOM_SEED)
         planet_df = final_df[~eb_mask]
         final_df  = pd.concat([planet_df, eb_df], ignore_index=True)
         print(f"  Capped EB eclipse windows to 200 (was {eb_mask.sum()})")
+
     final_df = final_df.sample(frac=1, random_state=RANDOM_SEED).reset_index(drop=True)
     final_df.to_csv(OUTPUT_CSV, index=False)
 
