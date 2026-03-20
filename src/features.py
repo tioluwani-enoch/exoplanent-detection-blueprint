@@ -1,3 +1,33 @@
+"""
+features.py — Phase 2b: Feature Engineering
+
+This takes the windowed light curve data from preprocess.py and computes
+physics-based features for the ML classifier.
+
+WHAT CHANGED FROM ORIGINAL:
+    - period_days, duration_hours, t0_bkjd now come from BLS (stored in meta.csv)
+      instead of being hardcoded. This means features.py doesn't need to know
+      anything about the star's orbit ahead of time.
+    - bls_snr (BLS signal-to-noise) is added as a new feature. Stars with
+      strong periodic signals get high SNR; random noise gets low SNR.
+      This helps the ML model distinguish real detections from noise.
+
+FEATURES EXPLAINED:
+    1. norm_depth         — How much the star dims during transit, normalized.
+                            Bigger = larger planet (relative to star).
+    2. dur_period_ratio   — Transit duration / orbital period.
+                            Encodes orbital geometry (impact parameter, etc.)
+    3. radius_ratio       — sqrt(norm_depth) ≈ planet radius / star radius.
+                            Direct physical meaning from transit geometry.
+    4. ingress_slope      — How quickly flux drops at transit start.
+                            Sharp = planet transit. Gradual = might be EB or noise.
+    5. secondary_depth    — Flux dip at phase 0.5 (opposite side of orbit).
+                            Near zero for planets (planet is tiny).
+                            Significant for eclipsing binaries (both stars emit).
+    6. bls_snr            — NEW: How confident BLS was in detecting the period.
+                            High SNR = strong periodic signal.
+"""
+
 import numpy as np
 import pandas as pd
 import os
@@ -11,7 +41,10 @@ STELLAR_PARAMS_CSV = os.path.join(PROCESSED_DIR, "stellar_params.csv")
 RANDOM_SEED = 42
 NORM_DEPTH_MIN = 0.0005
 
-# Hardcoded fallback — overridden automatically if ingest.py has saved stellar_params.csv
+# Hardcoded fallback for stellar radius/mass — overridden if stellar_params.csv exists
+# These are STELLAR properties (size and mass of the STAR, not the planet).
+# They come from the Kepler FITS headers or catalogs.
+# We need them to convert radius_ratio (Rp/Rs) into an actual planet size.
 STELLAR_PARAMS = {
     11446443: {"radius_rsun": 1.000, "mass_msun": 0.980, "t_eff_k": 5850.0},
     5780885:  {"radius_rsun": 2.020, "mass_msun": 1.350, "t_eff_k": 5933.0},
@@ -27,13 +60,11 @@ STELLAR_PARAMS = {
 def load_stellar_params():
     """
     Load stellar params from ingest.py output CSV if it exists.
-    To enable this path, add one line to the end of ingest.py:
-        results.to_csv(os.path.join(PROCESSED_DIR, "stellar_params.csv"), index=False)
-    Falls back to hardcoded STELLAR_PARAMS if CSV is missing.
+    These are properties of the STAR (not the planet) — needed to convert
+    relative measurements (like radius_ratio) into absolute physical values.
     """
     if os.path.exists(STELLAR_PARAMS_CSV):
         df = pd.read_csv(STELLAR_PARAMS_CSV)
-        # Use median across quarters to get one value per star
         df_agg = df.groupby("kic_id").agg(
             stellar_rad_rs=("stellar_rad_rs", "median"),
             t_eff_k=("t_eff_k", "median"),
@@ -59,17 +90,36 @@ def load_stellar_params():
 # ── FEATURE COMPUTATION ───────────────────────────────────────────────────────
 
 def compute_features(period, duration, flux_out, flux_in, t_eff_k=5778.0):
+    """
+    Compute the core transit features from flux measurements.
+
+    Parameters come from BLS (period, duration) and from the windowed
+    light curve (flux_in, flux_out).
+
+    Returns None if the values are physically unreasonable (e.g., depth
+    too small to be a planet, or period outside Kepler's sensitivity range).
+    """
+    # Normalized depth = how much flux drops during transit
     norm_depth = (flux_out - flux_in) / flux_out if flux_out != 0 else 0.0
+
+    # Apply limb darkening correction (the star's edge is dimmer than center,
+    # which affects measured transit depth)
     norm_depth_corrected = correct_depth_for_limb_darkening(norm_depth, t_eff_k)
+
+    # Duration-to-period ratio encodes orbital geometry
     dur_period_ratio = duration / period
+
+    # Radius ratio ≈ sqrt(depth) — comes from geometry:
+    # depth ≈ (Rp/Rs)² because the planet blocks a circular area
     radius_ratio = norm_depth_corrected ** 0.5 if norm_depth_corrected > 0 else 0.0
 
+    # Physics filters — reject unphysical values
     if not (NORM_DEPTH_MIN < norm_depth < 0.1):
-        return None
+        return None  # depth < 0.05% is too small; > 10% is likely an EB
     if not (0.5 < period < 500):
-        return None
+        return None  # outside Kepler's useful period range
     if not (0.001 < dur_period_ratio < 0.1):
-        return None
+        return None  # unphysical geometry
 
     return {
         "norm_depth": norm_depth,
@@ -80,14 +130,17 @@ def compute_features(period, duration, flux_out, flux_in, t_eff_k=5778.0):
 
 def compute_ingress_egress_slope(lc_df, center_time, duration_hours):
     """
-    Compute ingress slope (flux dropping into transit) and egress slope
-    (flux recovering). For a clean planet transit these are steep and roughly
-    symmetric; EB contamination produces shallower or asymmetric slopes.
-    Returns (ingress_slope, egress_slope) as Δflux/Δday — normalized by depth
-    so values are comparable across different stellar brightnesses.
+    Compute how steeply the flux drops into transit (ingress) and
+    recovers out of transit (egress).
+
+    WHY THIS MATTERS:
+    A real planet transit has sharp, steep ingress/egress because the
+    planet's edge crosses the stellar disk quickly.
+    An eclipsing binary often has more gradual slopes.
+    A noise artifact has random, asymmetric slopes.
     """
     half_dur = (duration_hours / 24) / 2
-    buffer   = half_dur * 2.0  # slightly wider window to capture shoulders
+    buffer   = half_dur * 2.0
 
     window = lc_df[
         (lc_df["time_BKJD"] >= center_time - buffer) &
@@ -116,10 +169,17 @@ def compute_ingress_egress_slope(lc_df, center_time, duration_hours):
 
 def compute_secondary_depth(lc_df, center_time, period_days, duration_hours):
     """
-    Measure flux dip at the expected secondary eclipse (phase 0.5).
-    A true exoplanet transit yields secondary_depth ≈ 0 because the planet
-    contributes negligible flux. An eclipsing binary shows a real dip here.
-    Returns secondary_depth >= 0; values > ~0.002 are EB red flags.
+    Check for a flux dip at orbital phase 0.5 (the opposite side of the orbit).
+
+    WHY THIS MATTERS:
+    When a planet transits, it blocks starlight → you see a dip.
+    Half an orbit later, the planet is BEHIND the star. Since the planet
+    contributes almost zero light, you see NO dip → secondary_depth ≈ 0.
+
+    For an eclipsing binary, BOTH stars are bright. So when star B passes
+    behind star A, you DO lose light → secondary_depth > 0.
+
+    This is one of the best features for separating planets from EBs.
     """
     secondary_center = center_time + period_days / 2.0
     half_dur = (duration_hours / 24) / 2
@@ -151,9 +211,11 @@ def compute_secondary_depth(lc_df, center_time, period_days, duration_hours):
 
 def correct_depth_for_limb_darkening(norm_depth, t_eff_k):
     """
-    Quadratic limb darkening correction (Mandel & Agol 2002).
-    Coefficients approximated from Claret (2011) Kepler bandpass.
-    Valid for solar-type stars 4500K < Teff < 7000K.
+    Limb darkening correction.
+
+    The star isn't uniformly bright — it's brighter at the center and
+    dimmer at the edges. This means the measured transit depth depends
+    on WHERE the planet crosses the star. This correction accounts for that.
     """
     teff = t_eff_k if (t_eff_k and not np.isnan(float(t_eff_k))) else 5778.0
     u1 = np.clip(0.6 - 0.0001 * (teff - 5778), 0.1, 0.9)
@@ -164,11 +226,16 @@ def correct_depth_for_limb_darkening(norm_depth, t_eff_k):
 
 def compute_physical_params(radius_ratio, period_days, kic_id, stellar_params=None):
     """
-    Derive planet radius (R_Jup) and orbital distance (AU) from
-    dimensionless transit features + stellar parameters.
+    Convert dimensionless transit features into physical planet properties.
 
     Planet radius:  R_p = (Rp/Rs) × R_star
-    Orbital dist:   a³  = M_star × P² (Kepler's 3rd Law, solar units)
+        We know Rp/Rs from the transit depth (radius_ratio).
+        We know R_star from the Kepler catalog.
+        Multiply them to get the actual planet size.
+
+    Orbital distance:  a³ = M_star × P²  (Kepler's Third Law)
+        Given the star's mass and the orbital period, we can compute
+        how far the planet orbits from its star.
     """
     if stellar_params is None:
         stellar_params = STELLAR_PARAMS
@@ -193,6 +260,10 @@ def compute_physical_params(radius_ratio, period_days, kic_id, stellar_params=No
 # ── FLUX EXTRACTION ───────────────────────────────────────────────────────────
 
 def compute_flux_in_out(lc_df, center_time, duration_hours, period_days):
+    """
+    Measure the median flux INSIDE the transit window vs OUTSIDE.
+    The difference between these is the transit depth for this window.
+    """
     half_duration = (duration_hours / 24) / 2
     half_window   = period_days / 2
 
@@ -212,17 +283,22 @@ def compute_flux_in_out(lc_df, center_time, duration_hours, period_days):
     if len(in_transit) == 0 or len(out_transit) == 0:
         return None, None
 
-    # Use 5th percentile instead of pure min — more robust against single noisy cadences
-    # Critical for short-duration transits like TrES-2b with only 3-4 in-transit points
     in_vals = in_transit["flux_norm"].values
     floor = np.nanpercentile(in_vals, 5) if len(in_vals) >= 4 else np.nanmin(in_vals)
     return (
-    floor,
-    np.nanmedian(out_transit["flux_norm"].values),
-)
+        floor,
+        np.nanmedian(out_transit["flux_norm"].values),
+    )
 
 
 def sample_negatives(meta_df, n_samples, period_days, duration_hours, t0_bkjd):
+    """
+    Sample windows that are NOT near any expected transit time.
+    These become negative examples (label=0) for training.
+
+    We use the BLS-derived period and t0 to compute where transits
+    SHOULD be, then pick windows far from those times.
+    """
     half_dur_days = (duration_hours / 24.0) / 2.0
     t_start       = meta_df["center_time"].min()
     t_end         = meta_df["center_time"].max()
@@ -251,9 +327,18 @@ def sample_negatives(meta_df, n_samples, period_days, duration_hours, t0_bkjd):
 # ── PER-TARGET PROCESSING ─────────────────────────────────────────────────────
 
 def process_one_target(kic_id, meta_df, lc_df, stellar_params=None):
+    """
+    Extract features for all windows of one target.
+
+    KEY CHANGE: period_days and duration_hours now come from meta_df,
+    which got them from BLS. Also extracts bls_snr as a feature.
+    """
+    # These values were DERIVED by BLS in preprocess.py, not hardcoded
     period_days    = meta_df["period_days"].iloc[0]
     duration_hours = meta_df["duration_hours"].iloc[0]
-    t0_bkjd        = meta_df["center_time"].min()
+    t0_bkjd        = meta_df["t0_bkjd"].iloc[0] if "t0_bkjd" in meta_df.columns \
+                     else meta_df["center_time"].min()
+    bls_snr        = meta_df["bls_snr"].iloc[0] if "bls_snr" in meta_df.columns else 0.0
     is_eb          = int(meta_df["label"].iloc[0]) == 0
 
     records  = []
@@ -299,6 +384,7 @@ def process_one_target(kic_id, meta_df, lc_df, stellar_params=None):
             "radius_ratio":        features["radius_ratio"],
             "ingress_slope":       ingress_slope,
             "secondary_depth":     secondary_depth,
+            "bls_snr":             bls_snr,   # NEW: BLS signal quality
             "planet_radius_Rjup":  phys["planet_radius_Rjup"],
             "orbital_distance_AU": phys["orbital_distance_AU"],
         })
@@ -310,6 +396,7 @@ def process_one_target(kic_id, meta_df, lc_df, stellar_params=None):
               f"{rejected} rejected")
         return target_df
 
+    # For planet hosts, also sample negative (non-transit) windows
     n_pos       = len(target_df)
     neg_windows = sample_negatives(meta_df, n_pos, period_days, duration_hours, t0_bkjd)
 
@@ -346,6 +433,7 @@ def process_one_target(kic_id, meta_df, lc_df, stellar_params=None):
             "radius_ratio":        rr,
             "ingress_slope":       ing_slope,
             "secondary_depth":     sec_depth,
+            "bls_snr":             bls_snr,   # Same BLS SNR for the star
             "planet_radius_Rjup":  np.nan,
             "orbital_distance_AU": np.nan,
         })
@@ -361,6 +449,11 @@ def process_one_target(kic_id, meta_df, lc_df, stellar_params=None):
 # ── MAIN PIPELINE ─────────────────────────────────────────────────────────────
 
 def build_combined_feature_dataset():
+    """
+    Build the full feature dataset from all preprocessed targets.
+    Reads combined_meta.csv (output of run_pipeline.py) which now
+    contains BLS-derived parameters instead of hardcoded ones.
+    """
     stellar_params = load_stellar_params()
     combined_meta  = pd.read_csv(os.path.join(PROCESSED_DIR, "combined_meta.csv"))
     all_records    = []
@@ -385,6 +478,7 @@ def build_combined_feature_dataset():
 
     final_df = pd.concat(all_records, ignore_index=True)
 
+    # Cap EB samples to prevent class imbalance
     eb_mask = (final_df["label"] == 0)
     if eb_mask.sum() > 200:
         eb_df     = final_df[eb_mask].sample(n=200, random_state=RANDOM_SEED)

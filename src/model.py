@@ -1,3 +1,31 @@
+"""
+model.py — Phase 3: ML Classification
+
+Trains a Random Forest classifier on the physics-based features from features.py.
+
+WHAT CHANGED:
+    - FEATURE_COLS now includes "bls_snr" (BLS signal-to-noise ratio).
+      This tells the model how confident the period detection was.
+      Stars with real planets have strong periodic signals → high BLS SNR.
+      Noise or non-periodic variability → low BLS SNR.
+    - Everything else is the same — the model doesn't care whether the
+      features were derived from BLS or hardcoded, it just trains on numbers.
+
+HOW THE MODEL WORKS (simple explanation):
+    A Random Forest is a collection of decision trees. Each tree looks at
+    the features (depth, duration ratio, etc.) and votes "transit" or
+    "not transit". The final answer is the majority vote.
+
+    class_weight='balanced' tells the model to pay extra attention to
+    whichever class has fewer examples. This is important because real
+    transit windows are rare compared to non-transit windows.
+
+    The model outputs a probability (0.0 to 1.0) for each window.
+    We then pick a threshold — if probability >= threshold, we call it
+    a transit. The threshold is tuned to balance precision (how many
+    flagged transits are real) vs recall (how many real transits we catch).
+"""
+
 import numpy as np
 import pandas as pd
 import os
@@ -17,25 +45,28 @@ OUTPUTS_DIR   = os.path.join(PROJECT_ROOT, "outputs")
 os.makedirs(OUTPUTS_DIR, exist_ok=True)
 
 FEATURES_CSV  = os.path.join(PROCESSED_DIR, "combined_features.csv")
-WINDOWS_ML    = os.path.join(PROCESSED_DIR, "windows_ml.npy")
-META_CSV      = os.path.join(PROCESSED_DIR, "meta.csv")
 MODEL_OUT     = os.path.join(OUTPUTS_DIR,   "random_forest.joblib")
 
-FEATURE_COLS        = ["norm_depth", "dur_period_ratio", "radius_ratio",
-                       "ingress_slope", "secondary_depth"]
+# Added bls_snr — the BLS signal-to-noise ratio from the period search.
+# This is a star-level feature (same value for all windows of one star)
+# that tells the model how strong the periodic signal is.
+FEATURE_COLS = [
+    "norm_depth",        # Transit depth (bigger = larger planet)
+    "dur_period_ratio",  # Duration / period (orbital geometry)
+    "radius_ratio",      # sqrt(depth) ≈ Rp/Rs
+    "ingress_slope",     # How sharply flux drops into transit
+    "secondary_depth",   # Dip at phase 0.5 (high = likely EB)
+    "bls_snr",           # BLS signal confidence (high = strong periodic signal)
+]
+
 OPERATING_THRESHOLD = 0.10
 
 
 # ── 1. LOAD DATA ──────────────────────────────────────────────────────────────
 
 def load_feature_dataset():
-    """
-    Load the physics-filtered feature dataset from features.py output.
-    Returns X (features), y (labels), and the full dataframe.
-    """
     df = pd.read_csv(FEATURES_CSV)
 
-    # Validate all expected feature columns are present
     missing = [c for c in FEATURE_COLS if c not in df.columns]
     if missing:
         raise ValueError(
@@ -56,11 +87,6 @@ def load_feature_dataset():
 # ── 2. RANDOM FOREST CLASSIFIER ───────────────────────────────────────────────
 
 def train_random_forest(X, y):
-    """
-    Train a Random Forest on physics features with class_weight='balanced'.
-    class_weight='balanced' mirrors real exoplanet surveys — tuned recall-heavy
-    so the Physics Lead can validate false positives manually.
-    """
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42, stratify=y
     )
@@ -85,10 +111,6 @@ def train_random_forest(X, y):
 # ── 3. EVALUATION ─────────────────────────────────────────────────────────────
 
 def evaluate_model(clf, scaler, X_test, y_test):
-    """
-    Full evaluation: classification report, confusion matrix, ROC-AUC.
-    NOTE: uses default threshold (0.5) — operating threshold applied separately.
-    """
     X_test_scaled = scaler.transform(X_test)
     y_pred        = clf.predict(X_test_scaled)
     y_prob        = clf.predict_proba(X_test_scaled)[:, 1]
@@ -105,17 +127,11 @@ def evaluate_model(clf, scaler, X_test, y_test):
     if len(np.unique(y_test)) > 1:
         roc_auc = roc_auc_score(y_test, y_prob)
         print(f"\n  ROC-AUC: {roc_auc:.4f}")
-    else:
-        print("\n  ROC-AUC: N/A (only one class in test set)")
 
     return y_pred, y_prob
 
 
 def cross_validate_model(clf, X, y):
-    """
-    5-fold stratified cross-validation.
-    More reliable than a single split given the small dataset size.
-    """
     scaler   = StandardScaler()
     X_scaled = scaler.fit_transform(X)
 
@@ -132,9 +148,6 @@ def cross_validate_model(clf, X, y):
 # ── 4. FEATURE IMPORTANCE ─────────────────────────────────────────────────────
 
 def plot_feature_importance(clf, output_path):
-    """
-    Plot Random Forest feature importances.
-    """
     importances = clf.feature_importances_
     indices     = np.argsort(importances)[::-1]
     names       = [FEATURE_COLS[i] for i in indices]
@@ -181,11 +194,6 @@ def plot_roc_curve(y_test, y_prob, output_path):
 # ── 6. THRESHOLD TUNING ───────────────────────────────────────────────────────
 
 def tune_threshold(y_test, y_prob):
-    """
-    Sweep thresholds to find operating point meeting physics targets.
-    Target: recall >= 0.75, precision >= 0.85.
-    Returns the best threshold and computed operating stats.
-    """
     print("\n── Threshold Tuning ────────────────────────────────────")
     print(f"  Physics target: recall >= 0.75, precision >= 0.85")
     print(f"  {'Threshold':>10} {'Precision':>10} {'Recall':>8} "
@@ -216,21 +224,12 @@ def tune_threshold(y_test, y_prob):
             best_threshold = thresh
 
     print(f"\n  Locked threshold: {best_threshold:.2f}")
-    if best_f1 == 0.0:
-        print(f"  (no threshold hit both targets — using default {OPERATING_THRESHOLD})")
-    else:
-        print(f"  (best F1 among thresholds meeting recall>=0.75, precision>=0.85)")
-
     return best_threshold
 
 
 # ── 7. FINAL EVALUATION AT OPERATING THRESHOLD ───────────────────────────────
 
 def evaluate_at_threshold(y_test, y_prob, threshold, cv_scores):
-    """
-    Re-evaluate at the physics-approved operating threshold.
-    Prints computed metrics — nothing hardcoded.
-    """
     y_pred_final = (y_prob >= threshold).astype(int)
 
     tp = int(((y_pred_final == 1) & (y_test == 1)).sum())
@@ -259,10 +258,6 @@ def evaluate_at_threshold(y_test, y_prob, threshold, cv_scores):
 # ── 8. WRITE PREDICTIONS TO CSV ───────────────────────────────────────────────
 
 def write_predictions(clf, scaler, threshold):
-    """
-    Add model predictions to the features CSV so visualize.py
-    uses model output, not training labels.
-    """
     features_df  = pd.read_csv(FEATURES_CSV)
     X_all        = features_df[FEATURE_COLS].values
     X_all_scaled = scaler.transform(X_all)
@@ -293,34 +288,15 @@ if __name__ == "__main__":
     print("  Phase 3 — ML Classification")
     print("=" * 55)
 
-    # Load data
     X, y, df = load_feature_dataset()
-
-    # Train
     clf, scaler, X_train, X_test, y_train, y_test = train_random_forest(X, y)
-
-    # Evaluate at default threshold
     y_pred, y_prob = evaluate_model(clf, scaler, X_test, y_test)
-
-    # Cross-validate
     cv_scores = cross_validate_model(clf, X, y)
-
-    # Feature importance plot
     plot_feature_importance(clf, os.path.join(OUTPUTS_DIR, "feature_importance.png"))
-
-    # ROC curve
     plot_roc_curve(y_test, y_prob, os.path.join(OUTPUTS_DIR, "roc_curve.png"))
-
-    # Threshold sweep — find operating point
     best_threshold = tune_threshold(y_test, y_prob)
-
-    # Final evaluation at operating threshold — all metrics computed, none hardcoded
     precision, recall = evaluate_at_threshold(y_test, y_prob, best_threshold, cv_scores)
-
-    # Write predictions to features CSV for visualize.py
     write_predictions(clf, scaler, best_threshold)
-
-    # Save model
     save_model(clf, scaler, MODEL_OUT)
 
     print("\nDone. Outputs saved to /outputs/")
