@@ -60,13 +60,6 @@ TARGETS = {
         "t0_bkjd":        121.489,
         "label":          1,
     },
-    6541920: {
-        "name":           "Kepler-11b",
-        "period_days":    10.3039,
-        "duration_hours": 4.116,
-        "t0_bkjd":        856.738,
-        "label":          1,
-    },
     6431596: {
         "name":           "KIC 6431596 (EB)",
         "period_days":    3.8457,
