@@ -212,10 +212,14 @@ def compute_flux_in_out(lc_df, center_time, duration_hours, period_days):
     if len(in_transit) == 0 or len(out_transit) == 0:
         return None, None
 
+    # Use 5th percentile instead of pure min — more robust against single noisy cadences
+    # Critical for short-duration transits like TrES-2b with only 3-4 in-transit points
+    in_vals = in_transit["flux_norm"].values
+    floor = np.nanpercentile(in_vals, 5) if len(in_vals) >= 4 else np.nanmin(in_vals)
     return (
-        np.nanmin(in_transit["flux_norm"].values),     # true transit floor, not biased median
-        np.nanmedian(out_transit["flux_norm"].values),
-    )
+    floor,
+    np.nanmedian(out_transit["flux_norm"].values),
+)
 
 
 def sample_negatives(meta_df, n_samples, period_days, duration_hours, t0_bkjd):

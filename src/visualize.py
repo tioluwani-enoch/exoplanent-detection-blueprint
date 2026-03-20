@@ -133,11 +133,21 @@ def plot_phase_folded(kic_id):
         f"{name} (KIC {kic_id}) — Phase-Folded Light Curve  "
         f"|  P = {period:.5f} days"
     )
-    ax.set_xlim(-0.1, 0.1)
+    # Narrow window to show transit clearly, bin points for visibility
+    phase_window = min(0.05, (config["period"] * 3) / (config["period"] * 24))
+    ax.set_xlim(-0.05, 0.05)
+    # Bin the phase curve so transit isn't buried in scatter
+    bin_edges = np.linspace(-0.05, 0.05, 100)
+    bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
+    bin_means = [
+        df_clean["flux_norm"][(phase >= bin_edges[i]) & (phase < bin_edges[i+1])].mean()
+        for i in range(len(bin_centers))
+    ]
+    ax.plot(bin_centers, bin_means, color="steelblue", lw=1.5, zorder=3)
     ax.set_ylim(
-        df_clean["flux_norm"].quantile(0.001),
-        df_clean["flux_norm"].quantile(0.999)
-    )
+    df_clean["flux_norm"].quantile(0.001),
+    df_clean["flux_norm"].quantile(0.999)
+)
 
     plt.tight_layout()
     out = os.path.join(OUTPUTS_DIR, f"KIC_{kic_id}_phasefolded.png")
